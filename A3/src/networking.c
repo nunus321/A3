@@ -92,14 +92,6 @@ void get_signature(char* password, char* salt, hashdata_t* hash) {
     get_data_sha(combined_input, *hash, strlen(combined_input), SHA256_HASH_SIZE);
 }
 
-// Struktur til at håndtere serverrespons
-typedef struct {
-    uint32_t length; // Længden af beskeden
-    hashdata_t block_hash; // Hash for den aktuelle blok
-    hashdata_t total_hash; // Hash for hele responsen
-    char* message; // Pointer til selve indholdet i responsen
-} ServerResponse;
-
 void register_user(char* username, char* password, char* salt) {
     hashdata_t hash; // En holder hvor den genererede hash skal gemmes
     get_signature(password, salt, &hash); // Kombinerer password og salt, og genererer en hash som 
@@ -107,7 +99,7 @@ void register_user(char* username, char* password, char* salt) {
 
     Request_t req;
     strncpy(req.header.username, username, USERNAME_LEN); // Kopierer brugernavnet til headeren
-    strncpy(req.header.salted_and_hashed, hash, sizeof(hashdata_t)); // Kopierer hash ind i headeren
+    memcpy(req.header.salted_and_hashed, hash, sizeof(hashdata_t)); // Kopierer hash ind i headeren
     req.header.length = htobe32(0); // Sætter længden til 0 og konverterer til endian(tjek edian.h)
 
     int sockfd;
@@ -121,41 +113,42 @@ void register_user(char* username, char* password, char* salt) {
     }
 
     printf("Forbundet til serveren, sender forespørgsel...\n");
-
     // Sender forespørgslen til serveren
     compsys_helper_writen(sockfd, &req, sizeof(RequestHeader_t));
-
     printf("Forespørgsel sendt, venter på svar...\n");
 
     // Initialiserer I/O til at læse fra serveren
     compsys_helper_readinitb(&rio, sockfd);
 
-    // Modtager og behandler serverrespons
-    while (1) {
-        ServerResponse resp;
+ // Læser og gemmer længden af beskeden
+    uint32_t length;
+    compsys_helper_readnb(&rio, &length, sizeof(length));
+    length = be32toh(length);  // Konvertere fra network byte order
 
-        //compsys_helper_readnb læser en specific mængde data. I nedenstående kode vil den læse
-        //dataen i de 4 første bytes som serveren returnere og tage længden af dem. Og konverterer
-        //fra big-endian (network byte order) til host machine byte order.(tjek be32toh i common.h)
-        compsys_helper_readnb(&rio, &resp.length, sizeof(resp.length));
-        resp.length = be32toh(resp.length);
-        
-        //Da de 4 første bytes blev læst i ovenstående kode trækkes 4 bytes
-        //fra den totale længde af det der returneres dvs. RESPONSE_HEADER_LEN - 4)
-        if (compsys_helper_readnb(&rio, response_buffer, RESPONSE_HEADER_LEN-4) <= 0) break;
+    // Læser og gemmer status, block_id, blocks_count og block_hash, total_hash
+    uint32_t status, block_id, blocks_count;
+    hashdata_t block_hash, total_hash;
+    
+    compsys_helper_readnb(&rio, &status, sizeof(status));
+    compsys_helper_readnb(&rio, &block_id, sizeof(block_id));
+    compsys_helper_readnb(&rio, &blocks_count, sizeof(blocks_count));
+    compsys_helper_readnb(&rio, block_hash, SHA256_HASH_SIZE);
+    compsys_helper_readnb(&rio, total_hash, SHA256_HASH_SIZE);
 
+    // Konvertere det fra network byte order
+    status = be32toh(status);
+    block_id = be32toh(block_id);
+    blocks_count = be32toh(blocks_count);
 
-        // Opretter et char hvis størrelse er reponsens længde +1. Det er +1 da den også skal 
-        // indeholde null-terminatoren "\0"
-        // Når der ikke er mere data at læse stoppes while-løkken
-        char message[resp.length + 1];
-        if (compsys_helper_readnb(&rio, &resp.length, sizeof(resp.length)) <= 0) break;
+    // Læser og gemmer reponsen fra serveren
+    char message[length + 1];
+    compsys_helper_readnb(&rio, message, length);
 
-        // Udskriver responsen
-        printf("Server response: %.*s\n", (int)resp.length, message);
-    }
+    message[length] = '\0';  // Da det er en string tilføjes "\0" i enden
 
-    // Lukker forbindelsen
+    printf("Server response (Block %d/%d, Status: %d): %s\n", 
+           block_id + 1, blocks_count, status, message);
+
     close(sockfd);
 }
 
