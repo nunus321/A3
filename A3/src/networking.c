@@ -101,7 +101,7 @@ typedef struct {
 } ServerResponse;
 
 void register_user(char* username, char* password, char* salt) {
-    hashdata_t hash; // En holder hvor den genererede hash skal gemmes
+    hashdata_t hash; // Indeholder hvor den genererede hash skal gemmes
     get_signature(password, salt, &hash); // Kombinerer password og salt, og genererer en hash som 
                                             // gemmes i "hashdata_t hash"
 
@@ -153,10 +153,16 @@ void register_user(char* username, char* password, char* salt) {
 
         // Udskriver responsen
         printf("Server response: %.*s\n", (int)resp.length, message);
+        // TODO: Få det til ikke at lave segmentation error
+
+    // Temp fix for segmentation fault
+    printf("Connection closing \n");
+    close(sockfd);
     }
 
     // Lukker forbindelsen
-    close(sockfd);
+     //printf("Connection closing \n");
+    // close(sockfd);
 }
 
 
@@ -166,9 +172,72 @@ void register_user(char* username, char* password, char* salt) {
  * and large files. 
  */
 void get_file(char* username, char* password, char* salt, char* to_get)
-{
-    // Your code here. This function has been added as a guide, but feel free 
-    // to add more, or work in other parts of the code
+{   
+    printf("I read a file \n");
+    hashdata_t hash; // Indeholder hvor den genererede hash skal gemmes
+    get_signature(password, salt, &hash); // Kombinerer password og salt, og genererer en hash som 
+                                            // gemmes i "hashdata_t hash"
+
+    Request_t req;
+    strncpy(req.header.username, username, USERNAME_LEN); // Kopierer brugernavnet til headeren
+    strncpy(req.header.salted_and_hashed, hash, sizeof(hashdata_t)); // Kopierer hash ind i headeren
+    strncpy(req.payload, to_get, MAX_MSG_LEN);
+    req.header.length = htobe32(0); // Sætter længden til 0 og konverterer til endian(tjek edian.h)
+
+    int sockfd;
+    compsys_helper_state_t rio;
+    char response_buffer[MAXBUF]; // Buffer til at modtage data
+
+    // Opretter socket og forbinder til serveren. Tjekker om mindre end 0 så der fejl eller success
+    if ((sockfd = compsys_helper_open_clientfd(server_ip, server_port)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Forbundet til serveren, sender forespørgsel...\n");
+
+    // Sender forespørgslen til serveren
+    compsys_helper_writen(sockfd, &req, sizeof(RequestHeader_t));
+
+    printf("Forespørgsel sendt, venter på svar...\n");
+
+    // Initialiserer I/O til at læse fra serveren
+    compsys_helper_readinitb(&rio, sockfd);
+
+    // Modtager og behandler serverrespons
+    while (1) {
+        ServerResponse resp;
+
+        //compsys_helper_readnb læser en specific mængde data. I nedenstående kode vil den læse
+        //dataen i de 4 første bytes som serveren returnere og tage længden af dem. Og konverterer
+        //fra big-endian (network byte order) til host machine byte order.(tjek be32toh i common.h)
+        compsys_helper_readnb(&rio, &resp.length, sizeof(resp.length));
+        resp.length = be32toh(resp.length);
+        
+        //Da de 4 første bytes blev læst i ovenstående kode trækkes 4 bytes
+        //fra den totale længde af det der returneres dvs. RESPONSE_HEADER_LEN - 4)
+        if (compsys_helper_readnb(&rio, response_buffer, RESPONSE_HEADER_LEN-4) <= 0) break;
+
+
+        // Opretter et char hvis størrelse er reponsens længde +1. Det er +1 da den også skal 
+        // indeholde null-terminatoren "\0"
+        // Når der ikke er mere data at læse stoppes while-løkken
+        char message[resp.length + 1];
+        if (compsys_helper_readnb(&rio, &resp.length, sizeof(resp.length)) <= 0) break;
+
+        // Udskriver responsen
+        printf("Server response: %.*s\n", (int)resp.length, message);
+        // TODO: Få det til ikke at lave segmentation error
+
+    // Temp fix for segmentation fault
+    printf("Connection closing \n");
+    close(sockfd);
+    }
+
+    // Lukker forbindelsen
+    // printf("Connection closing \n");
+    // close(sockfd);
+    
 }
 
 int main(int argc, char **argv)
