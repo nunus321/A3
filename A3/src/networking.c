@@ -256,7 +256,7 @@ void get_file(char* username, char* password, char* salt, char* to_get)
     block_id = be32toh(block_id);
     blocks_count = be32toh(blocks_count);
 
-   if (1 < blocks_count) {
+   //if (1 < blocks_count) {
     printf("FILE IS BIGGGG\n");
 
     // Læser og gemmer reponsen fra serveren
@@ -274,7 +274,7 @@ void get_file(char* username, char* password, char* salt, char* to_get)
         fclose(newfile);
     }
 
-    }
+   // }
         close(sockfd);
 
 }
