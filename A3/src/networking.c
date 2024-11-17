@@ -257,7 +257,7 @@ void get_file(char* username, char* password, char* salt, char* to_get)
     blocks_count = be32toh(blocks_count);
 
    //if (1 < blocks_count) {
-    printf("FILE IS BIGGGG\n");
+    //printf("FILE IS BIGGGG\n");
 
     // Læser og gemmer reponsen fra serveren
     char message[length + 1];
