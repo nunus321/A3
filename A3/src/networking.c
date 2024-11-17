@@ -104,7 +104,7 @@ void register_user(char* username, char* password, char* salt) {
 
     int sockfd;
     compsys_helper_state_t rio;
-    char response_buffer[MAXBUF]; // Buffer til at modtage data
+    //char response_buffer[MAXBUF]; // Buffer til at modtage data
 
     // Opretter socket og forbinder til serveren. Tjekker om mindre end 0 så der fejl eller success
     if ((sockfd = compsys_helper_open_clientfd(server_ip, server_port)) < 0) {
@@ -160,8 +160,81 @@ void register_user(char* username, char* password, char* salt) {
  */
 void get_file(char* username, char* password, char* salt, char* to_get)
 {
-    // Your code here. This function has been added as a guide, but feel free 
-    // to add more, or work in other parts of the code
+    hashdata_t hash; // En holder hvor den genererede hash skal gemmes
+    get_signature(password, salt, &hash); // Kombinerer password og salt, og genererer en hash som 
+                                            // gemmes i "hashdata_t hash"
+
+    Request_t req2;
+    strncpy(req2.header.username, username, USERNAME_LEN); // Kopierer brugernavnet til headeren
+    memcpy(req2.header.salted_and_hashed, hash, sizeof(hashdata_t)); // Kopierer hash ind i headeren
+
+    if (to_get == NULL) {
+        printf("The requested file doesnt exist!");
+    }
+
+    memcpy(req2.payload, to_get, MAX_PAYLOAD); // Kopierer hash ind i headeren
+
+    req2.header.length = htobe32(strlen(req2.payload));
+
+
+    int sockfd;
+    compsys_helper_state_t rio;
+
+    // Opretter socket og forbinder til serveren. Tjekker om mindre end 0 så der fejl eller success
+    if ((sockfd = compsys_helper_open_clientfd(server_ip, server_port)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Forbundet til serveren, sender forespørgsel...\n");
+    // Sender forespørgslen til serveren
+    compsys_helper_writen(sockfd, &req2, sizeof(req2));
+    printf("Forespørgsel sendt, venter på svar...\n");
+
+    // Initialiserer I/O til at læse fra serveren
+    compsys_helper_readinitb(&rio, sockfd);
+
+    // Læser og gemmer længden af beskeden
+    uint32_t length;
+    compsys_helper_readnb(&rio, &length, sizeof(length));
+    length = be32toh(length);  // Konvertere fra network byte order
+
+    // Læser og gemmer status, block_id, blocks_count og block_hash, total_hash
+    uint32_t status, block_id, blocks_count;
+    hashdata_t block_hash, total_hash;
+
+    compsys_helper_readnb(&rio, &status, sizeof(status));
+    compsys_helper_readnb(&rio, &block_id, sizeof(block_id));
+    compsys_helper_readnb(&rio, &blocks_count, sizeof(blocks_count));
+    compsys_helper_readnb(&rio, block_hash, SHA256_HASH_SIZE);
+    compsys_helper_readnb(&rio, total_hash, SHA256_HASH_SIZE);
+
+    // Konvertere det fra network byte order
+    status = be32toh(status);
+    block_id = be32toh(block_id);
+    blocks_count = be32toh(blocks_count);
+
+   if (1 < blocks_count) {
+    printf("FILE IS BIGGGG\n");
+
+    // Læser og gemmer reponsen fra serveren
+    char message[length + 1];
+    compsys_helper_readnb(&rio, message, length);
+
+    message[length] = '\0';  // Da det er en string tilføjes "\0" i enden
+
+    
+    printf("Server response (Block %d/%d, Status: %d): %s\n", 
+           block_id + 1, blocks_count, status, message);
+    FILE* newfile = fopen(to_get, "w");
+    if (newfile != 0) {
+        fprintf(newfile,message);
+        fclose(newfile);
+    }
+
+    }
+        close(sockfd);
+
 }
 
 int main(int argc, char **argv)

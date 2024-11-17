@@ -53,7 +53,7 @@ class RequestHandler(socketserver.StreamRequestHandler):
         try:
             # Read request
             bytes_message = self.request.recv(MSG_MAX)
-
+            print(bytes_message)
             # Extract request attributes
             username = bytes_message[
                 0
@@ -74,7 +74,8 @@ class RequestHandler(socketserver.StreamRequestHandler):
             ]
 
             username = username.decode('utf-8').strip('\x00')
-
+            print(f"len(request) is: {len(request)}")
+            print(f"request_length is: {request_length}")
             # Validate message length
             if len(request) != request_length:
                 self.handle_error(
