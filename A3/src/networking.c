@@ -18,11 +18,15 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <time.h> 
+#include <sys/time.h> 
+
 
 char server_ip[IP_LEN];
 char server_port[PORT_LEN];
 char my_ip[IP_LEN];
 char my_port[PORT_LEN];
+
 
 int c;
 
@@ -152,6 +156,44 @@ void register_user(char* username, char* password, char* salt) {
     close(sockfd);
 }
 
+void save_salt(const char* username, const char* salt) {
+    // Åbner filen "salts.txt" i append-tilstand
+    FILE* file = fopen("salts.txt", "a"); 
+    if (file == NULL) { 
+        // Hvis filen ikke kan åbnes, udskriv en fejlmeddelelse og afslut programmet
+        perror("Failed to open salt file");
+        exit(EXIT_FAILURE);
+    }
+    // Skriver brugernavn og salt i formatet "brugernavn:salt" til filen
+    fprintf(file, "%s:%s\n", username, salt); 
+    // Lukker filen efter skrivning
+    fclose(file);
+}
+
+int load_salt(const char* username, char* salt) {
+    // Åbner filen "salts.txt" i læsetilstand
+    FILE* file = fopen("salts.txt", "r");
+    if (!file) return 0; // Returnerer 0, hvis filen ikke findes
+
+    // Variabler til at gemme linjen og midlertidige værdier for brugernavn og salt
+    char line[256], file_username[USERNAME_LEN], file_salt[SALT_LEN + 1];
+
+    // Læser hver linje fra filen, indtil der ikke er flere linjer
+    while (fgets(line, sizeof(line), file)) {
+        // Parser linjen i formatet "brugernavn:salt" og sammenligner brugernavn
+        if (sscanf(line, "%15[^:]:%64s", file_username, file_salt) == 2 && strcmp(file_username, username) == 0) {
+            // Hvis brugernavn matcher, kopier salt til output-parameteren
+            strncpy(salt, file_salt, SALT_LEN); 
+            salt[SALT_LEN] = '\0'; // Sikrer at salt-strengen er null-termineret
+            fclose(file); // Lukker filen
+            return 1; // Returnerer 1 for at indikere, at salt blev fundet
+        }
+    }
+
+    // Lukker filen, hvis ingen match blev fundet
+    fclose(file);
+    return 0; // Returnerer 0 for at indikere, at der ikke blev fundet et match
+}
 
 /*
  * Get a file from the server by sending the username and signature, along with
@@ -164,8 +206,23 @@ void get_file(char* username, char* password, char* salt, char* to_get)
     // to add more, or work in other parts of the code
 }
 
+void generate_random_salt(char* salt, size_t size) {
+    srand((unsigned int)time(NULL)); 
+    // Genererer en tilfældig salt bestående af alfabetiske tegn
+    for (size_t i = 0; i < size; i++) { 
+        salt[i] = 'a' + (rand() % 26); // Tilfældig karakter mellem 'a' og 'z'
+    }
+    // Sikrer, at salt-strengen afsluttes med en null-terminator
+    salt[size] = '\0'; 
+}
+
+
 int main(int argc, char **argv)
 {
+    char username[USERNAME_LEN];
+    char password[PASSWORD_LEN];
+    char user_salt[SALT_LEN+1];
+
     // Users should call this script with a single argument describing what 
     // config to use
     if (argc != 2)
@@ -215,9 +272,7 @@ int main(int argc, char **argv)
     fprintf(stdout, "Client at: %s:%s\n", my_ip, my_port);
     fprintf(stdout, "Server at: %s:%s\n", server_ip, server_port);
 
-    char username[USERNAME_LEN];
-    char password[PASSWORD_LEN];
-    char user_salt[SALT_LEN+1];
+
     
     fprintf(stdout, "Enter a username to proceed: ");
     scanf("%16s", username);
@@ -240,14 +295,13 @@ int main(int argc, char **argv)
     // Note that a random salt should be used, but you may find it easier to
     // repeatedly test the same user credentials by using the hard coded value
     // below instead, and commenting out this randomly generating section.
-    for (int i=0; i<SALT_LEN; i++)
-    {
-        user_salt[i] = 'a' + (random() % 26);
-    }
-    user_salt[SALT_LEN] = '\0';
     //strncpy(user_salt, 
     //    "0123456789012345678901234567890123456789012345678901234567890123\0", 
     //    SALT_LEN+1);
+    if (!load_salt(username, user_salt)) { // CHANGE: Attempt to load salt for the provided username
+        generate_random_salt(user_salt, SALT_LEN); // CHANGE: Generate random salt if none exists
+        save_salt(username, user_salt); // CHANGE: Save new salt for future use
+    }
 
     fprintf(stdout, "Using salt: %s\n", user_salt);
 
