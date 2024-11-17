@@ -20,6 +20,8 @@
 #include <arpa/inet.h>
 #include <time.h> 
 #include <sys/time.h> 
+#include <stdbool.h>> 
+
 
 
 char server_ip[IP_LEN];
@@ -124,10 +126,8 @@ void register_user(char* username, char* password, char* salt) {
     // Initialiserer I/O til at læse fra serveren
     compsys_helper_readinitb(&rio, sockfd);
 
- // Læser og gemmer længden af beskeden
+    // Læser og gemmer længden af beskeden
     uint32_t length;
-    compsys_helper_readnb(&rio, &length, sizeof(length));
-    length = be32toh(length);  // Konvertere fra network byte order
 
     // Læser og gemmer status, block_id, blocks_count og block_hash, total_hash
     uint32_t status, block_id, blocks_count;
@@ -147,8 +147,7 @@ void register_user(char* username, char* password, char* salt) {
     // Læser og gemmer reponsen fra serveren
     char message[length + 1];
     compsys_helper_readnb(&rio, message, length);
-
-    message[length] = '\0';  // Da det er en string tilføjes "\0" i enden
+    message[length] = '\0';  
 
     printf("Server response (Block %d/%d, Status: %d): %s\n", 
            block_id + 1, blocks_count, status, message);
@@ -200,85 +199,110 @@ int load_salt(const char* username, char* salt) {
  * a file path. Note that this function should be able to deal with both small 
  * and large files. 
  */
-void get_file(char* username, char* password, char* salt, char* to_get)
-{
-    hashdata_t hash; // En holder hvor den genererede hash skal gemmes
-    get_signature(password, salt, &hash); // Kombinerer password og salt, og genererer en hash som 
-                                            // gemmes i "hashdata_t hash"
+void get_file(char* username, char* password, char* salt, char* to_get) {
+    hashdata_t hash;
+    get_signature(password, salt, &hash);
 
-    Request_t req2;
-    strncpy(req2.header.username, username, USERNAME_LEN); // Kopierer brugernavnet til headeren
-    memcpy(req2.header.salted_and_hashed, hash, sizeof(hashdata_t)); // Kopierer hash ind i headeren
-
-    if (to_get == NULL) {
-        printf("The requested file doesnt exist!");
-    }
-
-    memcpy(req2.payload, to_get, MAX_PAYLOAD); // Kopierer hash ind i headeren
-
-    req2.header.length = htobe32(strlen(req2.payload));
-
+    Request_t req;
+    strncpy(req.header.username, username, USERNAME_LEN);
+    memcpy(req.header.salted_and_hashed, hash, sizeof(hashdata_t));
+    memcpy(req.payload, to_get, MAX_PAYLOAD);
+    req.header.length = htobe32(strlen(req.payload));
 
     int sockfd;
     compsys_helper_state_t rio;
 
-    // Opretter socket og forbinder til serveren. Tjekker om mindre end 0 så der fejl eller success
     if ((sockfd = compsys_helper_open_clientfd(server_ip, server_port)) < 0) {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
 
-    printf("Forbundet til serveren, sender forespørgsel...\n");
-    // Sender forespørgslen til serveren
-    compsys_helper_writen(sockfd, &req2, sizeof(req2));
-    printf("Forespørgsel sendt, venter på svar...\n");
+    printf("Connected to server, sending file request...\n");
+    compsys_helper_writen(sockfd, &req, sizeof(req));
+    printf("Request sent, waiting for response...\n");
 
-    // Initialiserer I/O til at læse fra serveren
     compsys_helper_readinitb(&rio, sockfd);
 
-    // Læser og gemmer længden af beskeden
-    uint32_t length;
-    compsys_helper_readnb(&rio, &length, sizeof(length));
-    length = be32toh(length);  // Konvertere fra network byte order
-
-    // Læser og gemmer status, block_id, blocks_count og block_hash, total_hash
-    uint32_t status, block_id, blocks_count;
-    hashdata_t block_hash, total_hash;
-
-    compsys_helper_readnb(&rio, &status, sizeof(status));
-    compsys_helper_readnb(&rio, &block_id, sizeof(block_id));
-    compsys_helper_readnb(&rio, &blocks_count, sizeof(blocks_count));
-    compsys_helper_readnb(&rio, block_hash, SHA256_HASH_SIZE);
-    compsys_helper_readnb(&rio, total_hash, SHA256_HASH_SIZE);
-
-    // Konvertere det fra network byte order
-    status = be32toh(status);
-    block_id = be32toh(block_id);
-    blocks_count = be32toh(blocks_count);
-
-   //if (1 < blocks_count) {
-    //printf("FILE IS BIGGGG\n");
-
-    // Læser og gemmer reponsen fra serveren
-    char message[length + 1];
-    compsys_helper_readnb(&rio, message, length);
-
-    message[length] = '\0';  // Da det er en string tilføjes "\0" i enden
-
-    
-    printf("Server response (Block %d/%d, Status: %d): %s\n", 
-           block_id + 1, blocks_count, status, message);
-    FILE* newfile = fopen(to_get, "w");
-    if (newfile != 0) {
-        fprintf(newfile,message);
-        fclose(newfile);
+    FILE* newfile = fopen(to_get, "wb");
+    if (!newfile) {
+        perror("Failed to open file for writing");
+        close(sockfd);
+        return;
     }
 
-   // }
-        close(sockfd);
+    uint32_t length, status, block_id, blocks_count;
+    hashdata_t block_hash, total_hash;
 
+    uint32_t expected_block_id = 0;
+
+    char** block_buffer = calloc(1024, sizeof(char*));
+    size_t* block_sizes = calloc(1024, sizeof(size_t));
+
+    while (1) {
+        if (compsys_helper_readnb(&rio, &length, sizeof(length)) <= 0) break;
+        length = be32toh(length);
+
+        if (compsys_helper_readnb(&rio, &status, sizeof(status)) <= 0) break;
+        status = be32toh(status);
+
+        if (compsys_helper_readnb(&rio, &block_id, sizeof(block_id)) <= 0) break;
+        block_id = be32toh(block_id);
+
+        if (compsys_helper_readnb(&rio, &blocks_count, sizeof(blocks_count)) <= 0) break;
+        blocks_count = be32toh(blocks_count);
+
+        compsys_helper_readnb(&rio, block_hash, SHA256_HASH_SIZE);
+        compsys_helper_readnb(&rio, total_hash, SHA256_HASH_SIZE);
+
+        char* message = malloc(length);
+        if (!message) {
+            perror("Memory allocation failed");
+            break;
+        }
+
+        size_t bytes_read = 0;
+        while (bytes_read < length) {
+            ssize_t n = compsys_helper_readnb(&rio, message + bytes_read, length - bytes_read);
+            if (n <= 0) {
+                perror("Failed to read full block");
+                free(message);
+                fclose(newfile);
+                close(sockfd);
+                return;
+            }
+            bytes_read += n;
+        }
+
+        if (block_id == expected_block_id) {
+            fwrite(message, 1, bytes_read, newfile);
+            printf("Received and wrote block %d/%d\n", block_id + 1, blocks_count);
+            free(message);
+            expected_block_id++;
+
+            while (block_buffer[expected_block_id]) {
+                fwrite(block_buffer[expected_block_id], 1, block_sizes[expected_block_id], newfile);
+                printf("Wrote buffered block %d/%d\n", expected_block_id + 1, blocks_count);
+                free(block_buffer[expected_block_id]);
+                block_buffer[expected_block_id] = NULL;
+                expected_block_id++;
+            }
+        } else {
+            block_buffer[block_id] = message;
+            block_sizes[block_id] = bytes_read;
+            printf("Buffered out-of-order block %d/%d\n", block_id + 1, blocks_count);
+        }
+
+        if (expected_block_id >= blocks_count) break;
+    }
+
+    free(block_buffer);
+    free(block_sizes);
+
+    fclose(newfile);
+    close(sockfd);
+
+    printf("File '%s' successfully received and saved in order.\n", to_get);
 }
-
 void generate_random_salt(char* salt, size_t size) {
     srand((unsigned int)time(NULL)); 
     // Genererer en tilfældig salt bestående af alfabetiske tegn
@@ -385,6 +409,8 @@ int main(int argc, char **argv)
     // for user-interaction the following lines will almost certainly need to 
     // be removed/altered.
 
+
+
     // Register the given user. As handed out, this line will run every time 
     // this client starts, and so should be removed if user interaction is 
     // added
@@ -399,6 +425,19 @@ int main(int argc, char **argv)
     // handed out, this line will run every time this client starts, and so 
     // should be removed if user interaction is added
     get_file(username, password, user_salt, "hamlet.txt");
+    
+    char fileLocation[PASSWORD_LEN];
+    bool turnedOn = true;
+    while (turnedOn) {
+        printf("Enter file location (or type 'exit' to quit): ");
+        scanf("%16s", fileLocation);
+        if (strcmp(fileLocation, "exit") == 0) {
+            turnedOn = false;
+        } else {
 
+        get_file(username, password, user_salt, fileLocation);
+        }
+    }
+    
     exit(EXIT_SUCCESS);
 }
